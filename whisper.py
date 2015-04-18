@@ -25,12 +25,13 @@
 #		Archive = Point+
 #			Point = timestamp,value
 
-import itertools
-import operator
+import re
 import os
-import struct
 import sys
 import time
+import struct
+import operator
+import itertools
 
 izip = getattr(itertools, 'izip', zip)
 ifilter = getattr(itertools, 'ifilter', filter)
@@ -121,17 +122,13 @@ UnitMultipliers = {
 
 
 def getUnitString(s):
-  if 'seconds'.startswith(s): return 'seconds'
-  if 'minutes'.startswith(s): return 'minutes'
-  if 'hours'.startswith(s): return 'hours'
-  if 'days'.startswith(s): return 'days'
-  if 'weeks'.startswith(s): return 'weeks'
-  if 'years'.startswith(s): return 'years'
+  for value in ('seconds', 'minutes', 'hours', 'days', 'weeks', 'years'):
+      if value.startswith(s):
+          return value
   raise ValueError("Invalid unit '%s'" % s)
 
 def parseRetentionDef(retentionDef):
-  import re
-  (precision, points) = retentionDef.strip().split(':')
+  (precision, points) = retentionDef.strip().split(':', 1)
 
   if precision.isdigit():
     precision = int(precision) * UnitMultipliers[getUnitString('s')]
@@ -218,16 +215,17 @@ def enableDebug():
 
 
 def __readHeader(fh):
-  info = __headerCache.get(fh.name)
-  if info:
-    return info
+  if CACHE_HEADERS:
+    info = __headerCache.get(fh.name)
+    if info:
+      return info
 
   originalOffset = fh.tell()
   fh.seek(0)
   packedMetadata = fh.read(metadataSize)
 
   try:
-    (aggregationType,maxRetention,xff,archiveCount) = struct.unpack(metadataFormat,packedMetadata)
+    (aggregationType, maxRetention, xff, archiveCount) = struct.unpack(metadataFormat, packedMetadata)
   except:
     raise CorruptWhisperFile("Unable to read header", fh.name)
 
@@ -236,8 +234,8 @@ def __readHeader(fh):
   for i in xrange(archiveCount):
     packedArchiveInfo = fh.read(archiveInfoSize)
     try:
-      (offset,secondsPerPoint,points) = struct.unpack(archiveInfoFormat,packedArchiveInfo)
-    except:
+      (offset, secondsPerPoint, points) = struct.unpack(archiveInfoFormat, packedArchiveInfo)
+    except (struct.error, ValueError, TypeError):
       raise CorruptWhisperFile("Unable to read archive%d metadata" % i, fh.name)
 
     archiveInfo = {
@@ -277,7 +275,7 @@ xFilesFactor specifies the fraction of data points in a propagation interval tha
 
     try:
       (aggregationType,maxRetention,xff,archiveCount) = struct.unpack(metadataFormat,packedMetadata)
-    except:
+    except (struct.error, ValueError):
       raise CorruptWhisperFile("Unable to read header", fh.name)
 
     try:
@@ -335,7 +333,7 @@ def validateArchiveList(archiveList):
 
     nextArchive = archiveList[i+1]
     if not archive[0] < nextArchive[0]:
-      raise InvalidConfiguration("A Whisper database may not configured having"
+      raise InvalidConfiguration("A Whisper database may not be configured having "
         "two archives with the same precision (archive%d: %s, archive%d: %s)" %
         (i, archive, i + 1, nextArchive))
 
@@ -522,13 +520,14 @@ def __propagate(fh,header,timestamp,higher,lower):
     return False
 
 
-def update(path,value,timestamp=None):
-  """update(path,value,timestamp=None)
+def update(path, value, timestamp=None):
+  """
+  update(path, value, timestamp=None)
 
-path is a string
-value is a float
-timestamp is either an int or float
-"""
+  path is a string
+  value is a float
+  timestamp is either an int or float
+  """
   value = float(value)
   with open(path,'r+b') as fh:
     return file_update(fh, value, timestamp)
@@ -710,13 +709,16 @@ def __archive_update_many(fh,header,archive,points):
 
 
 def info(path):
-  """info(path)
+  """
+  info(path)
 
-path is a string
-"""
-  with open(path,'rb') as fh:
-    return __readHeader(fh)
-
+  path is a string
+  """
+  try:
+    with open(path,'rb') as fh:
+      return __readHeader(fh)
+  except (IOError, OSError):
+    pass
   return None
 
 def fetch(path,fromTime,untilTime=None,now=None):
@@ -735,10 +737,10 @@ Returns None if no data can be returned
     return file_fetch(fh, fromTime, untilTime, now)
 
 
-def file_fetch(fh, fromTime, untilTime, now = None):
+def file_fetch(fh, fromTime, untilTime, now=None):
   header = __readHeader(fh)
   if now is None:
-    now = int( time.time() )
+    now = int(time.time())
   if untilTime is None:
     untilTime = now
   fromTime = int(fromTime)
@@ -747,7 +749,7 @@ def file_fetch(fh, fromTime, untilTime, now = None):
   # Here we try and be flexible and return as much data as we can.
   # If the range of data is from too far in the past or fully in the future, we
   # return nothing
-  if (fromTime > untilTime):
+  if fromTime > untilTime:
     raise InvalidTimeInterval("Invalid time interval: from time '%s' is after until time '%s'" % (fromTime, untilTime))
 
   oldestTime = now - header['maxRetention']
@@ -870,14 +872,14 @@ def file_merge(fh_from, fh_to):
     untilTime = fromTime
 
 
-def diff(path_from, path_to, ignore_empty = False):
+def diff(path_from, path_to, ignore_empty=False):
   """ Compare two whisper databases. Each file must have the same archive configuration """
   with open(path_from, 'rb') as fh_from:
     with open(path_to, 'rb+') as fh_to:
       return file_diff(fh_from, fh_to, ignore_empty)
 
 
-def file_diff(fh_from, fh_to, ignore_empty = False):
+def file_diff(fh_from, fh_to, ignore_empty=False):
   headerFrom = __readHeader(fh_from)
   headerTo = __readHeader(fh_to)
 
