@@ -7,6 +7,9 @@ import math
 import random
 import struct
 
+import errno
+from mock import patch, mock_open
+
 try:
     import unittest2 as unittest
 except ImportError:
@@ -183,6 +186,55 @@ class TestWhisper(WhisperTestBase):
 
         with AssertRaisesException(whisper.InvalidAggregationMethod('Unrecognized aggregation method derp')):
             whisper.aggregate('derp', [12, 2, 3123, 1])
+
+    def _test_create_exception(self, exception_method='write', e=None):
+        """
+        Behaviour when creating a whisper file on a full filesystem
+        """
+        m_open = mock_open()
+        # Get the mocked file object and override interresting attributes
+        m_file = m_open.return_value
+        m_file.name = self.filename
+        method = getattr(m_file, exception_method)
+
+        if not e:
+          e = IOError(errno.ENOSPC, "Mocked IOError")
+        method.side_effect = e
+
+        with patch('whisper.open', m_open, create=True):
+          with patch('os.unlink') as m_unlink:
+            self.assertRaises(e.__class__, whisper.create, self.filename, self.retention)
+
+        return (m_file, m_unlink)
+
+    def test_create_write_ENOSPC(self):
+        """
+        Behaviour when creating a whisper file on a full filesystem (write)
+        """
+        (m_file, m_unlink) = self._test_create_exception('write')
+        m_unlink.assert_called_with(self.filename)
+
+    def test_create_close_ENOSPC(self):
+        """
+        Behaviour when creating a whisper file on a full filesystem (close)
+        """
+        (m_file, m_unlink) = self._test_create_exception('close')
+        m_unlink.assert_called_with(self.filename)
+
+    def test_create_close_EIO(self):
+        """
+        Behaviour when creating a whisper file and getting an I/O error (EIO)
+        """
+        (m_file, m_unlink) = self._test_create_exception('close', e=IOError(errno.EIO))
+        self.assertTrue(m_unlink.called)
+
+    def test_create_close_exception(self):
+        """
+        Behaviour when creating a whisper file and getting a generic exception
+        """
+        (m_file, m_unlink) = self._test_create_exception('close', e=Exception("boom!"))
+        # Must not call os.unlink on exception other than IOError
+        self.assertFalse(m_unlink.called)
 
     def test_create_and_info(self):
         """
